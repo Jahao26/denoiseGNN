@@ -25,21 +25,6 @@ class MatchingAttention(nn.Module):
         :param utt: (batch_size, emb_dim)
         :return:(batch_size, emb_dim)
         """
-        # M_ = M.permute(1, 2, 0)
-        # x_ = self.transform(utt).unsqueeze(1)  # (batch, 1, emb_dim)
-        # alpha = torch.bmm(x_, M_)
-        # alpha = torch.tanh(alpha)
-        # alpha = F.softmax(alpha, dim=2)
-        # # print('before normalize:', alpha.size())  # (16,1,108)
-        # alpha_sum = torch.sum(alpha, dim=2, keepdim=True)
-        # alpha = alpha / alpha_sum
-        # # print('after normalize', alpha.size())  # (16,1,108)
-        #
-        # mid = torch.bmm(alpha, M.transpose(0, 1))
-        # # print('mid_size', mid.size())  # (16,1,600)
-        # attn_pool = torch.bmm(alpha, M.transpose(0, 1))[:, 0, :]
-        # # print('attn_pool.size', attn_pool.size())  # (16,600)
-        # return attn_pool
         x_ = self.transform(utt).unsqueeze(1)  # (batch_size, 1, emb_dim)
         seq_len = M.shape[-1]
         M_ = M.permute(1, 2, 0)  # (batch_size, emb_dim, seq_len)
@@ -48,22 +33,10 @@ class MatchingAttention(nn.Module):
         # 归一化
         alpha_sum = torch.sum(alpha, dim=2, keepdim=True)
         alpha = alpha / alpha_sum
-
-        #  torch.bmm(alpha, M.transpose(0, 1)) = (batch_size, 1, emb_dim)
         att_score = torch.bmm(alpha, M.transpose(0, 1))[:, 0, :]  # (batch_size, emb_dim)
 
         return att_score
 
-
-class HLU(nn.Module):
-    def __init__(self, alpha=0.1):
-        super(HLU, self).__init__()
-        self.alpha = alpha
-
-    def forward(self, inputs):
-        middle = torch.ones_like(inputs)
-        out = torch.where(inputs >= 0, inputs, (self.alpha * inputs) / (middle - inputs))
-        return out
 
 
 class attentive_node_features(nn.Module):
@@ -79,7 +52,6 @@ class attentive_node_features(nn.Module):
         '''
         features : (B, N, V)
         lengths : (B, )
-        nodal_att_type : type of the final nodal attention
         '''
 
         if nodal_att_type == None:
@@ -125,7 +97,7 @@ def mask_logic(alpha, adj):
 class GAT(nn.Module):
     '''
     use linear to avoid out of memory
-    H_i = alpha_ij(W_rH_j) //改成Hi = alpha_ij(W_rH_j) + alpha_ii * (W_ii*H_i))
+    Hi = alpha_ij(W_rH_j) + alpha_ii * (W_ii*H_i))
     alpha_ij = attention(H_i, H_j)
     '''
     def __init__(self, hidden_size):
@@ -147,7 +119,7 @@ class GAT(nn.Module):
         alpha = self.linear(X).permute(0, 2, 1)  # (B, 1, N)
         alpha_ii = alpha
         # alpha = F.leaky_relu(alpha)
-        adj = adj.unsqueeze(1)  # (B, 1, N)  这里还没归一化，可以得到alpha_ii
+        adj = adj.unsqueeze(1)  # (B, 1, N)  
         # print('K.size:{},alpha.size:{},adj.size:{}'.format(K.size(),alpha.size(),adj.size()))
         alpha = mask_logic(alpha, adj)  # (B, 1, N)
         # print('alpha after mask',alpha.size())
@@ -161,7 +133,7 @@ class GAT(nn.Module):
         Q1 = self.Wri(Q0)  # (B, D)
 
         s_mask = s_mask.unsqueeze(2).float()  # (B, N, 1)
-        V = V0 * s_mask + V1 * (1 - s_mask)  # V1，V0 emb_dim对应乘s_mask
+        V = V0 * s_mask + V1 * (1 - s_mask)
 
         attn_sum = torch.bmm(attn_weight, V).squeeze(1) + Q1  # (B, D)
         # print('attn_sum',attn_sum.size())
@@ -171,9 +143,6 @@ class GAT(nn.Module):
 
 class MyLSTM(nn.Module):
     def __init__(self, input_sz, hidden_sz, g_sz):
-        '''
-        功能：融合图结构输出和不含上下文输出，起到有限的控制上下文错误传播的目的。
-        '''
         super(MyLSTM, self).__init__()
         self.input_sz = input_sz
         self.hidden_sz = hidden_sz
@@ -195,8 +164,6 @@ class MyLSTM(nn.Module):
             nn.init.uniform_(weight, -stdv, stdv)
 
     def node_forward(self, xt, ht, Ct_x, mt, Ct_m):
-
-        # # # new standard lstm
         hx_concat = torch.cat((ht, xt), dim=-1)
         hm_concat = torch.cat((ht, mt), dim=-1)
         hxm_concat = torch.cat((ht, xt, mt), dim=-1)
@@ -219,7 +186,7 @@ class MyLSTM(nn.Module):
         batch_sz, seq_sz, _ = x.size()
         hidden_seq = []
         cell_seq = []
-        for t in range(seq_sz):  # iterate over the time steps
+        for t in range(seq_sz):
             ht = torch.zeros((batch_sz, self.hidden_sz)).to(x.device)
             Ct_x = torch.zeros((batch_sz, self.hidden_sz)).to(x.device)
             Ct_m = torch.zeros((batch_sz, self.hidden_sz)).to(x.device)
@@ -228,16 +195,13 @@ class MyLSTM(nn.Module):
             ht, Ct_x, Ct_m = self.node_forward(xt, ht, Ct_x, mt, Ct_m)
             hidden_seq.append(ht)
             cell_seq.append(Ct_x)
-        hidden_seq = torch.stack(hidden_seq).permute(1, 0, 2)  # batch_size x max_len x hidden
+        hidden_seq = torch.stack(hidden_seq).permute(1, 0, 2)
         cell_seq = torch.stack(cell_seq).permute(1, 0, 2)
         return cell_seq
 
 
 class myconcat(nn.Module):
     def __init__(self, input_sz, hidden_sz, g_sz):
-        '''
-        功能：融合图结构输出和不含上下文输出，起到有限的控制上下文错误传播的目的。
-        '''
         super(myconcat, self).__init__()
         self.input_sz = input_sz
         self.hidden_sz = hidden_sz
@@ -259,8 +223,6 @@ class myconcat(nn.Module):
             nn.init.uniform_(weight, -stdv, stdv)
 
     def node_forward(self, xt, mt):
-
-        # # # new standard lstm
         hx_concat = xt
         hm_concat = mt
         hxm_concat = torch.cat((xt, mt), dim=1)
@@ -310,11 +272,9 @@ class AutomaticWeightedLoss(nn.Module):
 class context_filter(nn.Module):
     def __init__(self):
         super(context_filter, self).__init__()
-        # self.alpha = nn.Parameter(torch.Tensor([0.3]), requires_grad=True)
-
+        
     def utterance_selector(self, key, context):
         '''
-        此处用余弦值计算当前话语与上下文的相似度
         :param key: (batch, dim)
         :param context: (batch, utts, dim)
         :return:(batch, utts)
@@ -325,7 +285,6 @@ class context_filter(nn.Module):
 
     def forward(self, context, ent, alpha, threshold):
         '''
-        此处可以将context和key分开
         :param context: (batch, utts, emb_dim)
         :param ent: (batch, utts)
         :return:
@@ -350,7 +309,6 @@ class context_filter(nn.Module):
         s2mask2 = torch.stack(s2mk, dim=-1)
         s2mask = s2mask2 * s2mask1
         ret_score = score_ * s2mask
-        # print('s1mask:{}, s2mask:{}, ret_score:{}'.format(s2mask1, s2mask2, ret_score))
         mask = torch.where(ret_score > threshold, 1.0, 0.0)
         # 处理s_mask  效果不好  已删除
         # 将对角线的掩码置0
@@ -367,20 +325,3 @@ if __name__ == '__main__':
     model = context_filter(200, 10)
     model.cuda()
     y = model(x)
-    # 处理s_mask  效果不好
-    # for batch_index, batch_dia in enumerate(s_mask):
-    #     for utt_index, utt in enumerate(batch_dia):
-    #         distance = 0
-    #         for index, state in enumerate(utt):
-    #             if index >= utt_index:
-    #                 if index == utt_index:
-    #                     mask[batch_index][utt_index][index] = 1
-    #                     continue
-    #                 if state == 1:
-    #                     distance += 1
-    #                     mask[batch_index][utt_index][index] = 1
-    #                     mask[batch_index][index][utt_index] = 1
-    #                     # print('utt_index:{},index:{}\nb{}'.format(utt_index, index, b))
-    #                     if distance == 2:
-    #                         break
-
