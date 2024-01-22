@@ -9,7 +9,7 @@ The code for IS2023 paper: A Graph Neural Network with Context Filtering and Fea
 # Run steps
 ## Preprocess 
 Method 1:
-Please download datasets and .py file from [here]([https://markdown.com.cn](https://github.com/declare-lab/conv-emotion/tree/master/COSMIC/feature-extraction)https://github.com/declare-lab/conv-emotion/tree/master/COSMIC/feature-extraction) and then preprocess the features on four dataset.
+Please download datasets and .py file from [here](https://github.com/declare-lab/conv-emotion/tree/master/COSMIC/feature-extraction) and then preprocess the features on four dataset.
 
 Method 2:
 Please download datasets from official website. We did not make any additional deletions or modifications to the data. And then utilize the revised code we provided (from CoPMP) to fine-tine the RoBERTa-Large.
